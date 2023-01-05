@@ -1,0 +1,247 @@
+//---------------------------------------------------------------------------------------
+// NOTE: This unit test produces "CompatibilityTestSeed.bim" which is saved in the "CompatibilityTestFiles" product by each build and used for cross version/stream compatibility testing.
+// @bsimethod
+//---------------------------------------------------------------------------------------
+TEST_F(CompatibilityTests, CompatibilityTestSeed)
+    {
+    SetupSeedProject();
+    ImportFunctionalSchema();
+    InsertCodeSpec();
+    InsertSpatialCategory();
+    InsertDrawingCategory();
+
+    DgnDbR db = GetDgnDb();
+    ASSERT_EQ(BentleyStatus::SUCCESS, db.Schemas().CreateClassViewsInDb());
+    ASSERT_EQ(1, db.Elements().MakeIterator(BIS_SCHEMA(BIS_CLASS_Subject)).BuildIdSet<DgnElementId>().size()) << "Expected just the root Subject";
+    InsertHierarchy(*db.Elements().GetRootSubject(), 1);
+    }
+
+//---------------------------------------------------------------------------------------
+// This unit test ensures that the "Modify" and "Insert" tests work with a matching combination of DgnPlatform and DgnDb file format.
+// @bsimethod
+//---------------------------------------------------------------------------------------
+TEST_F(CompatibilityTests, ModifyCurrent)
+    {
+    SetupSeedProject();
+    InsertCodeSpec();
+    InsertSpatialCategory();
+    InsertDrawingCategory();
+
+    DgnDbR db = GetDgnDb();
+    ASSERT_EQ(1, db.Elements().MakeIterator(BIS_SCHEMA(BIS_CLASS_Subject)).BuildIdSet<DgnElementId>().size()) << "Expected just the root Subject";
+    SubjectCPtr rootSubject = db.Elements().GetRootSubject();
+    InsertHierarchy(*rootSubject, 1);
+    ModifyHierarchy(*rootSubject, 1);
+    InsertHierarchy(*rootSubject, 2);
+    }
+
+--------------------------------------------------------------------------------------
+// @bsimethod
+//---------------------------------------------------------------------------------------
+void CompatibilityTests::InsertCodeSpec()
+    {
+    CodeSpecPtr codeSpec = CodeSpec::Create(GetDgnDb(), GetCodeSpecName(), CodeScopeSpec::CreateModelScope());
+    ASSERT_TRUE(codeSpec.IsValid());
+    ASSERT_EQ(DgnDbStatus::Success, codeSpec->Insert());
+    }
+
+//---------------------------------------------------------------------------------------
+// @bsimethod
+//---------------------------------------------------------------------------------------
+CodeSpecCPtr CompatibilityTests::GetCodeSpec()
+    {
+    CodeSpecCPtr codeSpec = GetDgnDb().CodeSpecs().GetCodeSpec(GetCodeSpecName());
+    BeAssert(codeSpec.IsValid());
+    return codeSpec;
+    }
+
+  /*---------------------------------------------------------------------------------------------**//**
+    * @bsimethod
+    //Inserts the instances(For only BisCore schema classes) of GeometricElement class heirarchy.
+    +---------------+---------------+---------------+---------------+---------------+------------------*/
+    void ECInstancesCompatibility::InsertInstancesForGeometricElementHeirarchy(ECClassCP className)
+        {
+        //Getting the immediate derived classes of GeometricElement
+        const ECDerivedClassesList& GeometricElementHeirarchy = className->GetDerivedClasses();
+
+        //Traversing through the heirarchy
+        for (ECClassCP ecClass : GeometricElementHeirarchy)
+            {
+            if (ecClass->GetName() == BIS_CLASS_GeometricElement2d)
+                {
+                InsertInstancesForGeometricElement2d(ecClass);
+                }
+            else if (ecClass->GetName() == BIS_CLASS_GeometricElement3d)
+                {
+                InsertInstancesForGeometricElement3d(ecClass);
+                }
+            }
+        }
+
+    /*---------------------------------------------------------------------------------------------**//**
+    * @bsimethod
+    //Inserts instances for the Document class heirarchy
+    +---------------+---------------+---------------+---------------+---------------+------------------*/
+    void ECInstancesCompatibility::InsertInstancesForDocument(ECClassCP className)
+        {
+        printf("\n\nInserting Instances for Document heirarchy:\n\n");
+
+        List.clear();
+        ASSERT_TRUE(List.empty());
+
+        //Getting the heirarchy of Document class
+        std::vector<ECClassCP> DerivedClassList = getDerivedClasses(className);
+
+        for (ECClassCP ecClass : DerivedClassList)
+            {
+            if (ecClass->GetSchema().GetName() == BIS_ECSCHEMA_NAME && ecClass->IsEntityClass() && ecClass->GetClassModifier() != ECClassModifier::Abstract)
+                {
+                //Gets the className
+                Utf8StringCR className = ecClass->GetName();
+                ASSERT_TRUE(ecClass != nullptr) << "ECClass '" << className << "' not found.";
+
+                //Creates Instance of the given class
+                ECN::StandaloneECInstancePtr ClassInstance = ecClass->GetDefaultStandaloneEnabler()->CreateInstance();
+                ASSERT_TRUE(ClassInstance.IsValid());
+
+                //Setting values for Model and Code
+                DgnCode code = DgnCode::CreateEmpty();
+                ASSERT_EQ(ECObjectsStatus::Success, ClassInstance->SetValue("Model", ECN::ECValue(drawingModel->GetModelId())));
+                ASSERT_EQ(ECObjectsStatus::Success, ClassInstance->SetValue("CodeSpec", ECN::ECValue(code.GetCodeSpecId())));
+                ASSERT_EQ(ECObjectsStatus::Success, ClassInstance->SetValue("CodeScope", ECN::ECValue(code.GetScopeElementId(*m_db))));
+                ASSERT_EQ(ECObjectsStatus::Success, ClassInstance->SetValue("CodeValue", ECN::ECValue(code.GetValueUtf8CP())));
+
+                //Creating Element of the specified instance
+                DgnElementPtr ele = createElement(ClassInstance);
+                ASSERT_TRUE(ele.IsValid()) << "Element creation failed for Class: " << className;
+
+                //Inserting the element
+                DgnDbStatus stat = DgnDbStatus::Success;
+                DgnElementCPtr eleP = ele->Insert(&stat);
+                ASSERT_TRUE(eleP.IsValid()) << "Insertion failed for Class: " << className;
+                ASSERT_EQ(DgnDbStatus::Success, stat);
+
+                if (stat == DgnDbStatus::Success)
+                    {
+                    printf("Instance inserted for class:%s\n", ecClass->GetName().c_str());
+                    }
+                }
+            }
+        }
+
+    /*---------------------------------------------------------------------------------------------**//**
+    * @bsimethod
+    //Inserts instances for the InformationReferenceElement class heirarchy
+    +---------------+---------------+---------------+---------------+---------------+------------------*/
+    void ECInstancesCompatibility::InsertInstancesForInformationReferenceElement(ECClassCP className)
+        {
+        printf("\n\nInserting instances for InformationReferenceElement heirarchy:\n\n");
+
+        List.clear();
+        ASSERT_TRUE(List.empty());
+
+        //Inserting a Link Model.
+        LinkModelPtr linkModel = DgnDbTestUtils::InsertLinkModel(*m_db, "TestLinkModel");
+        SubjectCPtr rootSubject = m_db->Elements().GetRootSubject();
+        ASSERT_TRUE(rootSubject.IsValid());
+
+        std::vector<ECClassCP> DerivedClassList = getDerivedClasses(className);
+
+        for (ECClassCP ecClass : DerivedClassList)
+            {
+            if (ecClass->GetSchema().GetName() == BIS_ECSCHEMA_NAME && ecClass->IsEntityClass() && ecClass->GetClassModifier() != ECClassModifier::Abstract)
+                {
+                //Gets the className
+                Utf8StringCR className = ecClass->GetName();
+                ASSERT_TRUE(ecClass != nullptr) << "ECClass '" << className << "' not found.";
+
+                //Creates Instance of the given class
+                ECN::StandaloneECInstancePtr ClassInstance = ecClass->GetDefaultStandaloneEnabler()->CreateInstance();
+                ASSERT_TRUE(ClassInstance.IsValid());
+
+                //Setting values for Model and Code
+                DgnCode code = DgnCode::CreateEmpty();
+                if (className == BIS_CLASS_Subject)
+                    {
+                    ECN::ECClassCP relClass = ecClass->GetSchema().GetClassCP(BIS_REL_SubjectOwnsSubjects);
+                    ASSERT_EQ(ECObjectsStatus::Success, ClassInstance->SetValue("Model", ECN::ECValue(DgnModel::RepositoryModelId())));
+                    ASSERT_EQ(ECObjectsStatus::Success, ClassInstance->SetValue("Parent", ECN::ECValue(rootSubject->GetElementId(), relClass->GetId())));
+                    }
+                else if ((className == BIS_CLASS_ExternalSource) || (className == BIS_CLASS_ExternalSourceAttachment) || (className == BIS_CLASS_ExternalSourceGroup))
+                    {
+                    ASSERT_EQ(ECObjectsStatus::Success, ClassInstance->SetValue("Model", ECN::ECValue(DgnModel::RepositoryModelId())));
+                    }
+                else
+                    {
+                    ASSERT_EQ(ECObjectsStatus::Success, ClassInstance->SetValue("Model", ECN::ECValue(linkModel->GetModelId())));
+                    }
+
+                ASSERT_EQ(ECObjectsStatus::Success, ClassInstance->SetValue("CodeSpec", ECN::ECValue(code.GetCodeSpecId())));
+                ASSERT_EQ(ECObjectsStatus::Success, ClassInstance->SetValue("CodeScope", ECN::ECValue(code.GetScopeElementId(*m_db))));
+                ASSERT_EQ(ECObjectsStatus::Success, ClassInstance->SetValue("CodeValue", ECN::ECValue(code.GetValueUtf8CP())));
+
+                //Creating Element of the specified instance
+                DgnElementPtr ele = createElement(ClassInstance);
+                ASSERT_TRUE(ele.IsValid()) << "Element creation failed for Class: " << className;
+
+                //Inserting the element
+                DgnDbStatus stat = DgnDbStatus::Success;
+                DgnElementCPtr eleP = ele->Insert(&stat);
+                ASSERT_TRUE(eleP.IsValid()) << "Insertion failed for Class: " << className;
+                ASSERT_EQ(DgnDbStatus::Success, stat);
+
+                if (stat == DgnDbStatus::Success)
+                    {
+                    printf("Instance inserted for class:%s\n", ecClass->GetName().c_str());
+                    }
+                }
+            }
+        }
+
+
+//---------------------------------------------------------------------------------------------
+// @bsimethod
+// Walks through all the classes of the BisCore schema and inserts instances for each class.
+// Note: For now the test bypasses a few classes(namely InformationPartitionElement heirarchy,
+//       Category, SubCategory, Texture and ViewDefinition ) which will be dealt later.
+//+---------------+---------------+---------------+---------------+---------------+------------
+TEST_F(ECInstancesCompatibility, InstancesCompatibilitySeed)
+    {
+    SetupSeedProject();
+    m_db->Schemas().CreateClassViewsInDb();
+
+    //Getting the BisCore Schema
+    ECSchemaCP BisSchema = m_db->Schemas().GetSchema(BIS_ECSCHEMA_NAME);
+    ASSERT_TRUE(BisSchema != nullptr);
+
+    //Getting the pointer of the Class
+    ECClassCP ElementClass = BisSchema->GetClassCP(BIS_CLASS_Element);
+    ASSERT_TRUE(ElementClass != nullptr);
+
+    //Emptying the contents of the vector.
+    List.clear();
+    ASSERT_TRUE(List.empty());
+
+    //Inserting a Drawing model
+    DocumentListModelPtr drawingListModel = DgnDbTestUtils::InsertDocumentListModel(*m_db, "DrawingListModel");
+    DrawingPtr drawing = DgnDbTestUtils::InsertDrawing(*drawingListModel, "Drawing");
+    drawingModel = DgnDbTestUtils::InsertDrawingModel(*drawing);
+    ASSERT_TRUE(drawingModel->Is2dModel());
+
+    const ECDerivedClassesList& ElementHeirarchy = ElementClass->GetDerivedClasses();
+
+    for (ECClassP ecClass : ElementHeirarchy)
+        {
+        List.push_back(ecClass);
+
+        if (ecClass->GetName() == BIS_CLASS_GeometricElement)
+            {
+            InsertInstancesForGeometricElementHeirarchy(ecClass);
+            }
+
+        else if (ecClass->GetName() == BIS_CLASS_InformationContentElement)
+            {
+            InsertInstancesForInformationContentElementHeirarchy(ecClass);
+            }
+        }
+    }

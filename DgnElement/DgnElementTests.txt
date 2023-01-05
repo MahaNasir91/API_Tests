@@ -1,0 +1,56 @@
+/*---------------------------------------------------------------------------------**//**
+* @bsimethod
++---------------+---------------+---------------+---------------+---------------+------*/
+TEST_F (DgnElementTests, InsertElement)
+    {
+    SetupSeedProject();
+
+    //Inserts a model
+    PhysicalModelPtr m1 = DgnDbTestUtils::InsertPhysicalModel(*m_db, "Model1");
+    EXPECT_TRUE(m1.IsValid());
+    m_db->SaveChanges("changeSet1");
+
+    auto keyE1 = InsertElement(m1->GetModelId());
+    DgnElementId e1id = keyE1->GetElementId();
+    DgnElementCPtr e1 = m_db->Elements().GetElement(e1id);
+    EXPECT_TRUE(e1 != nullptr);
+
+    // Now update without making any change => LASTMOD should change anyway.
+    uint64_t insertTime;
+    ASSERT_EQ(BSISUCCESS, e1->QueryLastModifyTime().ToJulianDay(insertTime));
+
+    BeThreadUtilities::BeSleep(1); // NB! LASTMOD resolution is 1 millisecond!
+
+    auto ed1 = e1->CopyForEdit();
+    ed1->Update();
+    e1 = m_db->Elements().GetElement(e1id);
+    uint64_t updateTime;
+    ASSERT_EQ(BSISUCCESS, e1->QueryLastModifyTime().ToJulianDay(updateTime));
+    EXPECT_NE(insertTime, updateTime);
+    }
+
+//---------------------------------------------------------------------------------------
+// @bsimethod
+//---------------------------------------------------------------------------------------
+TEST_F(DgnElementTests, GenericDomainElements)
+    {
+    SetupSeedProject();
+    PhysicalModelPtr model = GetDefaultPhysicalModel();
+    DgnCategoryId categoryId = GetDefaultCategoryId();
+
+    // GenericSpatialLocation
+        {
+        GenericSpatialLocationPtr element = GenericSpatialLocation::Create(*model, categoryId);
+        ASSERT_TRUE(element.IsValid());
+        ASSERT_TRUE(element->Insert().IsValid());
+        ASSERT_TRUE(element->GetElementId().IsValid());
+        }
+
+    // GenericPhysicalObject
+        {
+        GenericPhysicalObjectPtr element = GenericPhysicalObject::Create(*model, categoryId);
+        ASSERT_TRUE(element.IsValid());
+        ASSERT_TRUE(element->Insert().IsValid());
+        ASSERT_TRUE(element->GetElementId().IsValid());
+        }
+    }

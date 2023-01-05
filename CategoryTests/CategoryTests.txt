@@ -1,0 +1,251 @@
+//=======================================================================================
+//! Test for inserting categories and checking their properties
+// @bsiclass
+//=======================================================================================
+TEST_F (CategoryTests, InsertCategory)
+    {
+    SetupSeedProject();
+    ASSERT_TRUE(m_db.IsValid());
+
+    //Category properties.
+    Utf8CP cat_name = "Test Category";
+    Utf8CP cat_desc = "This is a test category.";
+
+    DefinitionModelR dictionary = m_db->GetDictionaryModel();
+    SpatialCategory category(dictionary, cat_name, DgnCategory::Rank::Domain, cat_desc);
+
+    //Appearence properties.
+    uint32_t weight = 10;
+    double trans = 0.5;
+    uint32_t dp = 1;
+
+    DgnSubCategory::Appearance appearence;
+    appearence.SetInvisible (false);
+    appearence.SetColor (ColorDef::DarkRed ());
+    appearence.SetWeight (weight);
+    appearence.SetTransparency (trans);
+    appearence.SetDisplayPriority (dp);
+
+    DgnCategoryCPtr pCategory = category.Insert(appearence);
+    ASSERT_TRUE(pCategory.IsValid());
+
+    //Verifying category properties
+    CompareCategories(category, cat_name, DgnCategory::Rank::Domain, cat_desc);
+    EXPECT_TRUE (category.GetCategoryId ().IsValid ());
+    EXPECT_FALSE (pCategory->IsSystemCategory ());
+    EXPECT_FALSE (pCategory->IsUserCategory ());
+    CompareCategories(*pCategory, category);
+
+    DgnCategoryId id = SpatialCategory::QueryCategoryId(dictionary, cat_name);
+    EXPECT_TRUE (id.IsValid ());
+    EXPECT_EQ(id, category.GetCategoryId());
+    EXPECT_EQ(id, pCategory->GetCategoryId());
+
+    DgnCategoryCPtr query = DgnCategory::Get(*m_db, id);
+    EXPECT_TRUE (query.IsValid ());
+
+    //Inserts Category 2
+    Utf8CP cat2_name = "Test Category 2";
+    Utf8CP cat2_desc = "This is test category 2.";
+
+    SpatialCategory category2(dictionary, cat2_name, DgnCategory::Rank::System, cat2_desc);
+    SpatialCategoryCPtr pCategory2 = category2.Insert(appearence);
+    ASSERT_TRUE(pCategory2.IsValid());
+
+    //Inserts Category 3
+    Utf8CP cat3_name = "Test Category 3";
+    Utf8CP cat3_desc = "This is test category 3.";
+
+    SpatialCategory category3(dictionary, cat3_name, DgnCategory::Rank::User, cat3_desc);
+    SpatialCategoryCPtr pCategory3 = category3.Insert(appearence);
+    ASSERT_TRUE(pCategory3.IsValid());
+
+    //Inserts Category 4
+    Utf8CP cat4_name = "Test Category 4";
+    Utf8CP cat4_desc = "This is test category 4.";
+
+    DrawingCategory category4(dictionary, cat4_name, DgnCategory::Rank::User, cat4_desc);
+    DrawingCategoryCPtr pCategory4 = category4.Insert(appearence);
+    ASSERT_TRUE(pCategory4.IsValid());
+
+    //Iterator for categories.
+    DgnCategoryIdSet spatialCategoryIds = SpatialCategory::MakeIterator(*m_db).BuildIdSet<DgnCategoryId>();
+    EXPECT_EQ(4, spatialCategoryIds.size());
+    DgnCategoryIdSet drawingCategoryIds = DrawingCategory::MakeIterator(*m_db).BuildIdSet<DgnCategoryId>();
+    EXPECT_EQ(1, drawingCategoryIds.size());
+    int nCompared = 0;
+    int nNotCompared = 0;
+    for (auto const& catId : spatialCategoryIds)
+        {
+        DgnCategory const* pCompareTo = nullptr;
+        if (category.GetCategoryId() == catId)
+            pCompareTo = &category;
+        else if (category2.GetCategoryId() == catId)
+            pCompareTo = &category2;
+        else if (category3.GetCategoryId() == catId)
+            pCompareTo = &category3;
+        else if (category4.GetCategoryId() == catId)
+            pCompareTo = &category4;
+
+        if (nullptr != pCompareTo)
+            {
+            CompareCategories(catId, *pCompareTo);
+            ++nCompared;
+            }
+        else
+            {
+            ++nNotCompared;
+            }
+        }
+
+    EXPECT_EQ(1, nNotCompared);
+    EXPECT_EQ(3, nCompared);
+}
+
+//=======================================================================================
+//! Test for Deleting a category.
+// @bsiclass
+//=======================================================================================
+TEST_F (CategoryTests, DeleteCategory)
+    {
+    SetupSeedProject();
+
+    Utf8CP name = "TestCategory";
+    Utf8CP desc = "This is a test category.";
+
+    DefinitionModelR dictionary = m_db->GetDictionaryModel();
+    SpatialCategory category(dictionary, name, DgnCategory::Rank::Domain, desc);
+
+    //Appearence properties.
+    uint32_t weight = 10;
+    double trans = 0.5;
+    uint32_t dp = 1;
+
+    DgnSubCategory::Appearance appearence;
+    appearence.SetInvisible (false);
+    appearence.SetColor (ColorDef::DarkRed ());
+    appearence.SetWeight (weight);
+    appearence.SetTransparency (trans);
+    appearence.SetDisplayPriority (dp);
+
+    //Inserts a category
+    DgnCategoryCPtr pCat = category.Insert(appearence);
+    ASSERT_TRUE(pCat.IsValid());
+    DgnCategoryId id = SpatialCategory::QueryCategoryId(dictionary, name);
+    EXPECT_TRUE(id.IsValid());
+
+    // Deletion of a category is not supported.
+    DgnDbStatus dlt = pCat->Delete();
+    EXPECT_EQ(DgnDbStatus::DeletionProhibited, dlt);
+
+    DgnCategoryId id1 = SpatialCategory::QueryCategoryId(dictionary, name);
+    EXPECT_TRUE(id1.IsValid());
+    }
+
+//=======================================================================================
+//! Test for Updating a category.
+// @bsiclass
+//=======================================================================================
+TEST_F (CategoryTests, UpdateCategory)
+    {
+    SetupSeedProject();
+
+    //Category properties.
+    Utf8CP name = "TestCategory";
+    Utf8CP desc = "This is a test category.";
+
+    DefinitionModelR dictionary = m_db->GetDictionaryModel();
+    SpatialCategory category(dictionary, name, DgnCategory::Rank::Domain, desc);
+
+    //Appearence properties.
+    uint32_t weight = 10;
+    double trans = 0.5;
+    uint32_t dp = 1;
+
+    DgnSubCategory::Appearance appearence;
+    appearence.SetInvisible (false);
+    appearence.SetColor (ColorDef::DarkRed ());
+    appearence.SetWeight (weight);
+    appearence.SetTransparency (trans);
+    appearence.SetDisplayPriority (dp);
+
+    //Inserts a category
+    EXPECT_TRUE(category.Insert(appearence).IsValid());
+    DgnCategoryId id = category.GetCategoryId();
+    EXPECT_TRUE(id.IsValid ());
+
+    //Utf8CP u_name = "UpdatedTestCategory";
+    Utf8CP u_desc = "This is the updated test category.";
+
+    //Updates category.
+    DgnCategoryPtr toFind = m_db->Elements().GetForEdit<DgnCategory>(id);
+    EXPECT_TRUE(toFind.IsValid());
+    toFind->SetDescription(Utf8String(u_desc));
+    EXPECT_EQ(DgnDbStatus::Success, toFind->Update());
+
+    //Verification of category properties
+    SpatialCategoryCPtr updatedCat = SpatialCategory::Get(*m_db, id);
+    EXPECT_TRUE(updatedCat.IsValid());
+    EXPECT_STREQ(u_desc, updatedCat->GetDescription());
+    }
+
+/*---------------------------------------------------------------------------------**//**
+* @bsimethod
++---------------+---------------+---------------+---------------+---------------+------*/
+TEST_F (CategoryTests, ChangeElementCategory)
+    {
+    SetupSeedProject();
+    DgnCategoryId spatialCategoryId1 = DgnDbTestUtils::InsertSpatialCategory(*m_db, "MySpatialCategory1");
+    DgnCategoryId spatialCategoryId2 = DgnDbTestUtils::InsertSpatialCategory(*m_db, "MySpatialCategory2");
+    DgnCategoryId drawingCategoryId = DgnDbTestUtils::InsertDrawingCategory(*m_db, "MyDrawingCategory");
+    PhysicalModelPtr physicalModel = DgnDbTestUtils::InsertPhysicalModel(*m_db, "MyPhysicalModel");
+
+    GenericPhysicalObjectPtr element = GenericPhysicalObject::Create(*physicalModel, spatialCategoryId1);
+    ASSERT_TRUE(element.IsValid());
+    ASSERT_TRUE(element->Insert().IsValid());
+    ASSERT_EQ(spatialCategoryId1.GetValue(), element->GetCategoryId().GetValue());
+
+    ASSERT_EQ(DgnDbStatus::Success, element->SetCategoryId(spatialCategoryId2));
+    ASSERT_EQ(spatialCategoryId2.GetValue(), element->GetCategoryId().GetValue());
+
+    ASSERT_NE(DgnDbStatus::Success, element->SetCategoryId(drawingCategoryId));
+    ASSERT_EQ(spatialCategoryId2.GetValue(), element->GetCategoryId().GetValue());
+	}
+
+//=======================================================================================
+//! Test for Deleting a subcategory.
+// @bsiclass
+//=======================================================================================
+TEST_F (CategoryTests, DeleteSubCategory)
+    {
+    SetupSeedProject();
+
+    Utf8CP name = "TestCategory";
+    Utf8CP desc = "This is a test category.";
+
+    SpatialCategory category(m_db->GetDictionaryModel(), name, DgnCategory::Rank::Domain, desc);
+
+    //Inserts a category.
+    DgnSubCategory::Appearance appearence;
+    EXPECT_TRUE(category.Insert(appearence).IsValid());
+    DgnCategoryId id = category.GetCategoryId();
+    EXPECT_TRUE(id.IsValid());
+
+    Utf8CP sub_name = "TestSubCategory";
+    Utf8CP sub_desc = "This is a test subcategory";
+    DgnSubCategory subcategory(DgnSubCategory::CreateParams(*m_db, id, sub_name, appearence, sub_desc));
+
+    //Inserts subcategory.
+    DgnSubCategoryCPtr pSubCat = subcategory.Insert();
+    ASSERT_TRUE(pSubCat.IsValid());
+
+    //Verifying subcategory properties
+    EXPECT_STREQ ("TestSubCategory", subcategory.GetSubCategoryName().c_str());
+    EXPECT_STREQ ("This is a test subcategory", subcategory.GetDescription ());
+
+    EXPECT_NE(DgnDbStatus::Success, pSubCat->Delete()); // can't delete except via "purge"
+    DgnDb::PurgeOperation purgeOperation(*m_db); // Give test permission to delete SubCategory (normally reserved for "purge" operations)
+    EXPECT_EQ(DgnDbStatus::Success, pSubCat->Delete());
+    DgnSubCategoryId sub_id = DgnSubCategory::QuerySubCategoryId(*m_db, subcategory.GetCode());
+    EXPECT_FALSE(sub_id.IsValid());
+    }

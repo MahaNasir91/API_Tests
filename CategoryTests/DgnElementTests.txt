@@ -1,0 +1,215 @@
+/*---------------------------------------------------------------------------------**//**
+* @bsimethod
++---------------+---------------+---------------+---------------+---------------+------*/
+TEST_F (DgnElementTests, InsertElement)
+    {
+    SetupSeedProject();
+
+    //Inserts a model
+    PhysicalModelPtr m1 = DgnDbTestUtils::InsertPhysicalModel(*m_db, "Model1");
+    EXPECT_TRUE(m1.IsValid());
+    m_db->SaveChanges("changeSet1");
+
+    auto keyE1 = InsertElement(m1->GetModelId());
+    DgnElementId e1id = keyE1->GetElementId();
+    DgnElementCPtr e1 = m_db->Elements().GetElement(e1id);
+    EXPECT_TRUE(e1 != nullptr);
+
+    // Now update without making any change => LASTMOD should change anyway.
+    uint64_t insertTime;
+    ASSERT_EQ(BSISUCCESS, e1->QueryLastModifyTime().ToJulianDay(insertTime));
+
+    BeThreadUtilities::BeSleep(1); // NB! LASTMOD resolution is 1 millisecond!
+
+    auto ed1 = e1->CopyForEdit();
+    ed1->Update();
+    e1 = m_db->Elements().GetElement(e1id);
+    uint64_t updateTime;
+    ASSERT_EQ(BSISUCCESS, e1->QueryLastModifyTime().ToJulianDay(updateTime));
+    EXPECT_NE(insertTime, updateTime);
+    }
+
+//---------------------------------------------------------------------------------------
+// @bsimethod
+//---------------------------------------------------------------------------------------
+TEST_F(DgnElementTests, GenericDomainElements)
+    {
+    SetupSeedProject();
+    PhysicalModelPtr model = GetDefaultPhysicalModel();
+    DgnCategoryId categoryId = GetDefaultCategoryId();
+
+    // GenericSpatialLocation
+        {
+        GenericSpatialLocationPtr element = GenericSpatialLocation::Create(*model, categoryId);
+        ASSERT_TRUE(element.IsValid());
+        ASSERT_TRUE(element->Insert().IsValid());
+        ASSERT_TRUE(element->GetElementId().IsValid());
+        }
+
+    // GenericPhysicalObject
+        {
+        GenericPhysicalObjectPtr element = GenericPhysicalObject::Create(*model, categoryId);
+        ASSERT_TRUE(element.IsValid());
+        ASSERT_TRUE(element->Insert().IsValid());
+        ASSERT_TRUE(element->GetElementId().IsValid());
+        }
+    }
+
+/*---------------------------------------------------------------------------------**//**
+* @bsimethod
++---------------+---------------+---------------+---------------+---------------+------*/
+TEST_F(DgnElementTests, GetSetAutoHandledProperties)
+    {
+    SetupSeedProject();
+    DgnElementId elementId;
+    uint32_t datetime;
+    uint32_t datetimeutc;
+    uint32_t boolean;
+    uint32_t p2d;
+    uint32_t p3d;
+    DateTime dateTime = DateTime(2016, 9, 24);
+    ECN::ECValue checkValue;
+    if (true)
+        {
+        DgnClassId classId(m_db->Schemas().GetClassId(DPTEST_SCHEMA_NAME, DPTEST_TEST_ELEMENT_WITHOUT_HANDLER_CLASS_NAME));
+        TestElement::CreateParams params(*m_db, m_defaultModelId, classId, m_defaultCategoryId, Placement3d(), DgnCode());
+        TestElement el(params);
+
+        ASSERT_EQ(DgnDbStatus::Success, el.GetPropertyIndex(boolean, "b"));
+        ASSERT_EQ(DgnDbStatus::Success, el.GetPropertyIndex(datetime, "dt"));
+        ASSERT_EQ(DgnDbStatus::Success, el.GetPropertyIndex(datetimeutc, "dtUtc"));
+        ASSERT_EQ(DgnDbStatus::Success, el.GetPropertyIndex(p2d, "p2d"));
+        ASSERT_EQ(DgnDbStatus::Success, el.GetPropertyIndex(p3d, "p3d"));
+
+        // get properties
+        ASSERT_EQ(false, el.GetPropertyValueBoolean("b"));
+        ASSERT_TRUE(!(el.GetPropertyValueDateTime("dt").IsValid()));
+        ASSERT_TRUE(!(el.GetPropertyValueDateTime("dtUtc").IsValid()));
+        ASSERT_TRUE(el.GetPropertyValueDPoint2d("p2d").IsEqual((DPoint2d::From(0, 0))));
+        ASSERT_TRUE(el.GetPropertyValueDPoint3d("p3d").IsEqual((DPoint3d::From(0, 0, 0))));
+
+        // No unhandled properties yet
+        ECN::ECValue checkValue;
+        EXPECT_EQ(DgnDbStatus::Success, el.GetPropertyValue(checkValue, "StringProperty"));
+        EXPECT_TRUE(checkValue.IsNull());
+
+        // Set unhandled property (in memory)
+        ASSERT_EQ(DgnDbStatus::Success, el.SetPropertyValue("StringProperty", ECN::ECValue("initial value")));
+
+        // check that we see the pending value
+        checkValue.Clear();
+        EXPECT_EQ(DgnDbStatus::Success, el.GetPropertyValue(checkValue, "StringProperty"));
+        EXPECT_STREQ("initial value", checkValue.ToString().c_str());
+
+        // Set properties
+        EXPECT_EQ(DgnDbStatus::Success, el.SetPropertyValue("b", false));
+        EXPECT_EQ(DgnDbStatus::Success, el.SetPropertyValue("dt", dateTime));
+        EXPECT_EQ(DgnDbStatus::Success, el.SetPropertyValue("dtUtc", dateTime));
+        EXPECT_EQ(DgnDbStatus::Success, el.SetPropertyValue("p2d", DPoint2d::From(0, 9)));
+        EXPECT_EQ(DgnDbStatus::Success, el.SetPropertyValue("p3d", DPoint3d::From(0, 9, 9)));
+        // Insert the element
+        DgnDbStatus stat;
+        DgnElementCPtr persistentEl = el.Insert(&stat);
+        ASSERT_EQ(DgnDbStatus::Success, stat);
+        ASSERT_TRUE(persistentEl.IsValid());
+
+        // Check that we see the stored value in memory
+        EXPECT_EQ(false, persistentEl->GetPropertyValueBoolean("b"));
+
+        EXPECT_TRUE(persistentEl->GetPropertyValueDateTime("dt").Equals(dateTime, true));
+
+        EXPECT_TRUE(persistentEl->GetPropertyValueDateTime("dtUtc").Equals(dateTime, true));
+
+        EXPECT_EQ(DPoint2d::From(0, 9), persistentEl->GetPropertyValueDPoint2d("p2d"));
+
+        EXPECT_EQ(DPoint3d::From(0, 9, 9), persistentEl->GetPropertyValueDPoint3d("p3d"));
+
+        elementId = persistentEl->GetElementId();
+        m_db->SaveChanges();
+        }
+
+    // Before updating the element check what is stored in DB
+    BeFileName fileName = m_db->GetFileName();
+    m_db->CloseDb();
+    m_db = nullptr;
+    OpenDb(m_db, fileName, Db::OpenMode::ReadWrite, true);
+    {
+    TestElementPtr element = m_db->Elements().GetForEdit<TestElement>(elementId);
+    EXPECT_EQ(false, element->GetPropertyValueBoolean("b"));
+
+    EXPECT_TRUE(element->GetPropertyValueDateTime("dt").Equals(dateTime, true));
+
+    EXPECT_TRUE(element->GetPropertyValueDateTime("dtUtc").Equals(dateTime, true));
+
+    EXPECT_EQ(DPoint2d::From(0, 9), element->GetPropertyValueDPoint2d("p2d"));
+
+    EXPECT_EQ(DPoint3d::From(0, 9, 9), element->GetPropertyValueDPoint3d("p3d"));
+    // Get some non-auto-handled properties using the same dynamic property API
+    EXPECT_EQ(element->GetModelId(), element->GetPropertyValueId<DgnModelId>("Model"));
+    EXPECT_EQ(element->GetCategoryId(), element->GetPropertyValueId<DgnCategoryId>("Category"));
+    EXPECT_STREQ(element->GetUserLabel(), element->GetPropertyValueString("UserLabel").c_str());
+    EXPECT_EQ(element->GetCode().GetCodeSpecId(), element->GetPropertyValueId<CodeSpecId>("CodeSpec"));
+    EXPECT_EQ(element->GetCode().GetScopeElementId(*m_db), element->GetPropertyValueId<DgnElementId>("CodeScope"));
+    EXPECT_STREQ(element->GetCode().GetValueUtf8().c_str(), element->GetPropertyValueString("CodeValue").c_str());
+    }
+}
+
+/*---------------------------------------------------------------------------------**//**
+* @bsimethod
++---------------+---------------+---------------+---------------+---------------+------*/
+TEST_F(DgnElementTests, OverrideAutohandledproperites)
+    {
+    SetupSeedProject();
+    DgnElementId elementId;
+    uint32_t boolean;
+    if (true)
+    {
+        DgnClassId classId(m_db->Schemas().GetClassId(DPTEST_SCHEMA_NAME, DPTEST_TEST_ELEMENT_CLASS_OVERRIDE_AUTOHADLEPROPERTIES));
+        TestElement::CreateParams params(*m_db, m_defaultModelId, classId, m_defaultCategoryId, Placement3d(), DgnCode());
+        TestElement el(params);
+        ASSERT_EQ(DgnDbStatus::Success, el.GetPropertyIndex(boolean, "p2d"));
+        // get property before setting
+        ASSERT_TRUE(el.GetPropertyValueDPoint2d("p2d").IsEqual((DPoint2d::From(0, 0))));
+        // set property
+        EXPECT_EQ(DgnDbStatus::Success, el.SetPropertyValue("p2d", DPoint2d::From(0, 9)));
+        //get property after setting
+        ASSERT_TRUE(el.GetPropertyValueDPoint2d("p2d").IsEqual((DPoint2d::From(0, 9))));
+        // Insert the element
+        DgnDbStatus stat;
+        DgnElementCPtr persistentEl = el.Insert(&stat);
+        ASSERT_EQ(DgnDbStatus::Success, stat);
+        ASSERT_TRUE(persistentEl.IsValid());
+        elementId = persistentEl->GetElementId();
+        // Check that what stored value in memory
+        ASSERT_TRUE(persistentEl->GetPropertyValueDPoint2d("p2d").IsEqual((DPoint2d::From(0, 9))));
+     }
+    BeFileName fileName = m_db->GetFileName();
+    m_db->SaveChanges();
+    m_db->CloseDb();
+    m_db = nullptr;
+    OpenDb(m_db, fileName, Db::OpenMode::ReadWrite, true);
+    {
+    // Check that what stored value in DB
+    TestElementCPtr element = m_db->Elements().Get<TestElement>(elementId);
+    ASSERT_TRUE(element->GetPropertyValueDPoint2d("p2d").IsEqual((DPoint2d::From(0, 9))));
+    }
+    if (true)
+       {
+       // Get ready to modify the element
+       TestElementPtr editEl = m_db->Elements().GetForEdit<TestElement>(elementId);
+       // initially we still see the initial/stored value
+       ASSERT_TRUE(editEl->GetPropertyValueDPoint2d("p2d").IsEqual((DPoint2d::From(0, 9))));
+       EXPECT_EQ(DgnDbStatus::Success, editEl->SetPropertyValue("p2d", DPoint2d::From(0, 10)));
+       // Update the element
+       DgnDbStatus stat = editEl->Update();
+       ASSERT_EQ(DgnDbStatus::Success, stat);
+       }
+    // check that the stored value
+    m_db->SaveChanges();
+    m_db->CloseDb();
+    m_db = nullptr;
+    OpenDb(m_db, fileName, Db::OpenMode::Readonly, true);
+    TestElementCPtr element = m_db->Elements().Get<TestElement>(elementId);
+    ASSERT_TRUE(element.IsValid());
+    ASSERT_TRUE(element->GetPropertyValueDPoint2d("p2d").IsEqual((DPoint2d::From(0, 10))));
+    }

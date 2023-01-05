@@ -1,0 +1,252 @@
+/*---------------------------------------------------------------------------------**//**
+* @bsimethod
++---------------+---------------+---------------+---------------+---------------+------*/
+TEST_F(TransactionManagerTests, UndoRedo)
+    {
+    SetupSeedProject();
+
+    CloseDb();
+    BeFileName outFileName = (BeFileName)m_db->GetDbFileName();
+    BeSQLite::Db::OpenMode mode = BeSQLite::Db::OpenMode::ReadWrite;
+    DgnDbTestFixture::GetSeedDbCopy(outFileName,L"Test.bim");
+    OpenDb(m_db, outFileName, mode);
+
+    TestDataManager::SetAsStandaloneDb(m_db, mode);
+    ASSERT_TRUE(m_db->IsStandalone());
+
+    auto& txns = m_db->Txns();
+    m_db->SaveChanges();
+
+    SpatialModelPtr defaultModel = m_db->Models().Get<SpatialModel>(m_defaultModelId);
+    ASSERT_TRUE(defaultModel.IsValid());
+
+    TestElementPtr templateEl = TestElement::Create(*m_db, m_defaultModelId, m_defaultCategoryId, "", 101.0);
+
+    ASSERT_TRUE(!txns.IsRedoPossible());
+
+    DgnElementCPtr el1 = templateEl->Insert();
+    m_db->SaveChanges("change 1");
+
+    ASSERT_TRUE(txns.IsUndoPossible());  // we have an undoable Txn, but nothing undone.
+    ASSERT_TRUE(!txns.IsRedoPossible());
+
+    auto stat = txns.ReverseSingleTxn();
+    ASSERT_TRUE(DgnDbStatus::Success == stat);
+    ASSERT_TRUE(txns.IsRedoPossible());
+
+    DgnElementCPtr afterUndo= m_db->Elements().GetElement(el1->GetElementId());
+    ASSERT_TRUE(!afterUndo.IsValid()); // it should not be in database.
+    stat = txns.ReinstateTxn();  // redo the add, put the added element back
+    ASSERT_TRUE(DgnDbStatus::Success == stat);
+
+    ASSERT_TRUE(txns.IsUndoPossible());
+    ASSERT_TRUE(!txns.IsRedoPossible());
+
+    DgnElementCPtr afterRedo = m_db->Elements().GetElement(el1->GetElementId());
+    ASSERT_TRUE(afterRedo.IsValid());
+    ASSERT_TRUE(el1.get() != afterRedo.get());
+
+    // make sure that undo/redo of an update also is reflected in the RangeTree
+    templateEl = TestElement::Create(*m_db, m_defaultModelId, m_defaultCategoryId, "");
+    DgnElementCPtr el2 = templateEl->Insert();
+    m_db->SaveChanges("create new");
+    AxisAlignedBox3d extents1 = defaultModel->QueryElementsRange();
+
+    templateEl->ChangeElement(201.);
+    templateEl->Update();
+    AxisAlignedBox3d extents2 = defaultModel->QueryElementsRange();
+    ASSERT_TRUE (!extents1.IsEqual(extents2));
+    m_db->SaveChanges("update one");
+
+    stat = txns.ReverseSingleTxn();
+    AxisAlignedBox3d extents3 = defaultModel->QueryElementsRange();
+    ASSERT_TRUE (extents1.IsEqual(extents3));    // after undo, range should be back to where it was before we did the update
+    ASSERT_TRUE(DgnDbStatus::Success == stat);
+
+    stat = txns.ReinstateTxn();  // redo the update
+    ASSERT_TRUE(DgnDbStatus::Success == stat);
+    AxisAlignedBox3d extents4 = defaultModel->QueryElementsRange();
+    ASSERT_TRUE (extents4.IsEqual(extents2));    // now it should be back to the same as after we did the original update
+
+    templateEl = TestElement::Create(*m_db, m_defaultModelId, m_defaultCategoryId, "");
+    DgnElementCPtr el3 = templateEl->Insert();
+
+    el1 = m_db->Elements().GetElement(el1->GetElementId()); // reload e11
+    el1->Delete();
+
+    DgnElementCPtr afterDelete= m_db->Elements().GetElement(el1->GetElementId());
+    ASSERT_TRUE(!afterDelete.IsValid());
+
+    m_db->AbandonChanges();
+
+    DgnElementCPtr afterAbandon = m_db->Elements().GetElement(el1->GetElementId());
+    ASSERT_TRUE(afterAbandon.IsValid());
+
+    templateEl = TestElement::Create(*m_db, m_defaultModelId, m_defaultCategoryId, "");
+    el2 = templateEl->Insert();
+    stat = txns.ReverseSingleTxn(); // reversing a txn with pending uncommitted changes should abandon them.
+    ASSERT_TRUE(DgnDbStatus::Success == stat);
+    ASSERT_TRUE(nullptr == m_db->Elements().FindLoadedElement(el2->GetElementId()));
+    ASSERT_TRUE(!m_db->Elements().GetElement(el2->GetElementId()).IsValid());
+
+    testModelUndoRedo(*m_db);
+    testRangeIndex();
+    }
+
+/*---------------------------------------------------------------------------------**//**
+* @bsimethod
++---------------+---------------+---------------+---------------+---------------+------*/
+TEST_F(TransactionManagerTests, ModelInsertReverse)
+    {
+    SetupSeedProject(BeSQLite::Db::OpenMode::ReadWrite, true /*=needBriefcase*/);
+    auto& txns = m_db->Txns();
+
+    ModelTxnMonitor monitor;
+
+    PhysicalModelPtr model1 = DgnDbTestUtils::InsertPhysicalModel(*m_db, "model1");
+    m_db->SaveChanges("changeSet1");
+    DgnModelId model1Id = model1->GetModelId();
+    EXPECT_TRUE(monitor.WasAdded(model1Id));
+    monitor.Clear();
+
+    //Reverse insertion.Model 1 shouldn't be in the Db now.
+    auto stat = txns.ReverseTxns(1);
+    EXPECT_EQ(DgnDbStatus::Success, stat);
+    EXPECT_FALSE(m_db->Models().GetModel(model1Id).IsValid());
+    EXPECT_TRUE(monitor.WasDeleted(model1Id));
+    monitor.Clear();
+
+    //Reinstate Transaction.Model should be back.
+    stat = txns.ReinstateTxn();
+    EXPECT_TRUE(monitor.WasAdded(model1Id));
+    monitor.Clear();
+    EXPECT_EQ(DgnDbStatus::Success, stat);
+    m_db->SaveChanges("changeSet2");
+
+    EXPECT_TRUE(m_db->Models().GetModel(model1Id).IsValid());
+    }
+
+/*---------------------------------------------------------------------------------**//**
+* @bsimethod
++---------------+---------------+---------------+---------------+---------------+------*/
+TEST_F(TransactionManagerTests, ModelDeleteReverse)
+    {
+    SetupSeedProject(BeSQLite::Db::OpenMode::ReadWrite, true /*=needBriefcase*/);
+    auto& txns = m_db->Txns();
+
+    PhysicalModelPtr model1 = DgnDbTestUtils::InsertPhysicalModel(*m_db, "model1");
+    DgnModelId model1Id = model1->GetModelId();
+    m_db->SaveChanges("changeSet1");
+
+    DgnDbStatus modelStatus = model1->Delete();
+    EXPECT_EQ(DgnDbStatus::Success, modelStatus);
+    EXPECT_FALSE(m_db->Models().GetModel(model1Id).IsValid());
+    m_db->SaveChanges("changeSet2");
+
+    //Reverse deletion.Model 1 should be in the Db now.
+    auto stat = txns.ReverseTxns(1);
+    EXPECT_EQ(DgnDbStatus::Success, stat);
+    EXPECT_TRUE(m_db->Models().GetModel(model1Id).IsValid());
+
+    //Reinstate Transaction.Model shouldn't be there anymore.
+    stat = txns.ReinstateTxn();
+    EXPECT_EQ(DgnDbStatus::Success, stat);
+    m_db->SaveChanges("changeSet3");
+
+    EXPECT_FALSE(m_db->Models().GetModel(model1Id).IsValid());
+    }
+
+/*---------------------------------------------------------------------------------**//**
+* @bsimethod
++---------------+---------------+---------------+---------------+---------------+------*/
+TEST_F(TransactionManagerTests, ElementInsertReverse)
+    {
+    SetupSeedProject(BeSQLite::Db::OpenMode::ReadWrite, true /*=needBriefcase*/);
+    auto& txns = m_db->Txns();
+
+    PhysicalModelPtr model1 = DgnDbTestUtils::InsertPhysicalModel(*m_db, "model1");
+    m_db->SaveChanges("changeSet1");
+    DgnModelId m1id = model1->GetModelId();
+    EXPECT_TRUE(m1id.IsValid());
+
+    auto keyE1 = InsertElement("E1", m1id);
+    auto keyE2 = InsertElement("E2", m1id);
+    m_db->SaveChanges("changeSet2");
+
+    DgnElementId e1id = keyE1->GetElementId();
+    DgnElementId e2id = keyE2->GetElementId();
+    EXPECT_TRUE(e1id.IsValid());
+    EXPECT_TRUE(e2id.IsValid());
+
+    //Reverse Transaction.Elements shouldn't be in the model now.
+    auto stat = txns.ReverseTxns(1);
+    EXPECT_EQ(DgnDbStatus::Success, stat);
+
+    EXPECT_EQ(nullptr, m_db->Elements().FindLoadedElement(e1id));
+    EXPECT_EQ(nullptr, m_db->Elements().FindLoadedElement(e2id));
+
+    //Reinstate transcation.The elements should be back in the model.
+    stat = txns.ReinstateTxn();
+    EXPECT_EQ (DgnDbStatus::Success, stat);
+    m_db->SaveChanges("changeSet3");
+
+    DgnElementCPtr e1 = m_db->Elements().GetElement(e1id);
+    EXPECT_TRUE(e1 != nullptr);
+    EXPECT_NE(nullptr, m_db->Elements().FindLoadedElement(e1id));
+
+    DgnElementCPtr e2 = m_db->Elements().GetElement(e2id);
+    EXPECT_TRUE(e2 != nullptr);
+    EXPECT_NE(nullptr, m_db->Elements().FindLoadedElement(e2id));
+
+    //Both the elements and the model shouldn't be in the database.
+    txns.ReverseAll();
+    EXPECT_FALSE(m_db->Models().GetModel(m1id).IsValid());
+    }
+
+/*---------------------------------------------------------------------------------**//**
+* @bsimethod
++---------------+---------------+---------------+---------------+---------------+------*/
+TEST_F (TransactionManagerTests, ElementDeleteReverse)
+    {
+    SetupSeedProject(BeSQLite::Db::OpenMode::ReadWrite, true /*=needBriefcase*/);
+    auto& txns = m_db->Txns();
+
+    //Creates a model.
+    PhysicalModelPtr model1 = DgnDbTestUtils::InsertPhysicalModel(*m_db, "model1");
+    m_db->SaveChanges("changeSet1");
+    DgnModelId m1id = model1->GetModelId();
+    EXPECT_TRUE(m1id.IsValid());
+
+    auto keyE1 = InsertElement("E1", m1id);
+    m_db->SaveChanges("changeSet2");
+
+    DgnElementId e1id = keyE1->GetElementId();
+    EXPECT_TRUE(e1id.IsValid());
+    DgnElementCP pE1 = m_db->Elements().FindLoadedElement(e1id);
+    EXPECT_NE (nullptr, pE1);
+    EXPECT_TRUE(txns.IsUndoPossible());
+
+    //Deletes the Element.
+    EXPECT_EQ (DgnDbStatus::Success, m_db->Elements().Delete(*pE1));
+    m_db->SaveChanges("changeSet3");
+
+    EXPECT_FALSE(m_db->Elements().GetElement(e1id).IsValid());
+
+    //Reverse Transaction. Element should be back in the model now.
+    auto stat = txns.ReverseTxns(1);
+    EXPECT_EQ(DgnDbStatus::Success, stat);
+    EXPECT_TRUE(m_db->Elements().GetElement(e1id) != nullptr);
+    EXPECT_NE(nullptr, m_db->Elements().FindLoadedElement(e1id));
+
+    //Reinstate transcation. The elements shouldn't be in the model.
+    stat = txns.ReinstateTxn();
+    EXPECT_EQ(DgnDbStatus::Success, stat);
+    m_db->SaveChanges("changeSet4");
+
+    EXPECT_FALSE(m_db->Elements().GetElement(e1id).IsValid());
+
+    //Both the elements and the model shouldn't be in the database.
+    txns.ReverseAll();
+    EXPECT_FALSE(m_db->Models().GetModel(m1id).IsValid());
+    }
+

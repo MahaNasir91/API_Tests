@@ -1,0 +1,23 @@
+/*---------------------------------------------------------------------------------**//**
+* @bsimethod
++---------------+---------------+---------------+---------------+---------------+------*/
+TEST_F(MaterialTest, CRUD)
+    {
+    SetupSeedProject();
+    DefinitionModelR dictionary = m_db->GetDictionaryModel();
+
+    RenderMaterialPtr mat = new RenderMaterial(dictionary, "Palette1", "Material1");
+    ASSERT_TRUE(mat.IsValid());
+    RenderMaterialCPtr persistent = mat->Insert();
+    EXPECT_TRUE(persistent.IsValid());
+    EXPECT_TRUE(persistent->GetElementId().IsValid());
+
+    Compare(*mat, *persistent);
+
+    mat->Update();
+    RenderMaterialCPtr updatedMat = m_db->Elements().Get<RenderMaterial>(mat->GetElementId());
+    EXPECT_TRUE(updatedMat.IsValid());
+    Compare(*mat, *updatedMat);
+
+    EXPECT_TRUE(DgnDbStatus::DeletionProhibited == updatedMat->Delete());
+    }
